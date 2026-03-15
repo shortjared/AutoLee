@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include "config.h"
+#include "state_json.h"
 
 // --- Forward declarations for functions defined in other modules ---
 bool startRunBetweenEndpoints();
@@ -140,37 +141,37 @@ void startWiFi() {
 // ==========================================================================
 //  State JSON
 // ==========================================================================
-String buildStateJSON() {
-  char buf[1024];
+String buildStateJSONString() {
   const char *wfStat = wifiConnected ? "Connected" : (wifiAPMode ? "AP Mode" : "Disconnected");
   String wfSSID = wifiConnected ? WiFi.SSID() : (wifiAPMode ? String(DEFAULT_AP_SSID) : String("\xe2\x80\x94"));
   String wfIP = wifiConnected ? WiFi.localIP().toString() : (wifiAPMode ? WiFi.softAPIP().toString() : String("\xe2\x80\x94"));
-  int written = snprintf(buf, sizeof(buf),
-    "{\"version\":\"%s\",\"state\":\"%s\",\"counter\":%ld,\"speed\":%lu,\"calibrated\":%s,"
-    "\"rawUp\":%ld,\"rawDown\":%ld,\"endpointUp\":%ld,\"endpointDown\":%ld,"
-    "\"upOffset\":%ld,\"downOffset\":%ld,\"position\":%ld,\"sgTrip\":%u,"
-    "\"workZone\":%ld,\"currentMa\":%u,"
-    "\"profileIdx\":%u,\"profileName\":\"%s\","
-    "\"profiles\":[{\"name\":\"Slow\",\"hz\":%lu,\"sg\":%u},"
-    "{\"name\":\"Normal\",\"hz\":%lu,\"sg\":%u},"
-    "{\"name\":\"Fast\",\"hz\":%lu,\"sg\":%u}],"
-    "\"wifiStatus\":\"%s\",\"wifiSSID\":\"%s\",\"wifiIP\":\"%s\","
-    "\"batchTarget\":%ld,\"batchCount\":%ld,\"batchActive\":%s}",
-    FW_VERSION,
-    runState==RUNNING?"RUNNING":runState==STOPPING?"STOPPING":runState==CALIBRATING?"CALIBRATING":runState==STALLED?"STALLED":runState==HOMING?"HOMING":"IDLE",
-    counter, (unsigned long)ui_speed_hz, endpointsCalibrated?"true":"false",
-    rawUp, rawDown, endpointUp, endpointDown,
-    (long)upOffsetSteps, (long)downOffsetSteps,
-    stepper ? stepper->getCurrentPosition() : 0L,
-    RUN_SG_TRIP,
-    (long)SG_WORK_ZONE_STEPS, RUN_CURRENT_MA,
-    activeProfile, profiles[activeProfile].name,
-    (unsigned long)profiles[0].speed_hz, profiles[0].sg_trip,
-    (unsigned long)profiles[1].speed_hz, profiles[1].sg_trip,
-    (unsigned long)profiles[2].speed_hz, profiles[2].sg_trip,
-    wfStat, wfSSID.c_str(), wfIP.c_str(),
-    batchTarget, batchCount,
-    batchActive ? "true" : "false");
+
+  StateSnapshot snap = {};
+  snap.version = FW_VERSION;
+  snap.state = runState==RUNNING?"RUNNING":runState==STOPPING?"STOPPING":runState==CALIBRATING?"CALIBRATING":runState==STALLED?"STALLED":runState==HOMING?"HOMING":"IDLE";
+  snap.counter = counter;
+  snap.speed_hz = ui_speed_hz;
+  snap.calibrated = endpointsCalibrated;
+  snap.rawUp = rawUp; snap.rawDown = rawDown;
+  snap.endpointUp = endpointUp; snap.endpointDown = endpointDown;
+  snap.upOffset = (long)upOffsetSteps; snap.downOffset = (long)downOffsetSteps;
+  snap.position = stepper ? stepper->getCurrentPosition() : 0L;
+  snap.sgTrip = RUN_SG_TRIP;
+  snap.workZone = (long)SG_WORK_ZONE_STEPS;
+  snap.currentMa = RUN_CURRENT_MA;
+  snap.profileIdx = activeProfile;
+  snap.profileName = profiles[activeProfile].name;
+  for (uint8_t i = 0; i < 3; i++) {
+    snap.profiles[i] = { profiles[i].name, profiles[i].speed_hz, profiles[i].sg_trip };
+  }
+  snap.wifiStatus = wfStat;
+  snap.wifiSSID = wfSSID.c_str();
+  snap.wifiIP = wfIP.c_str();
+  snap.batchTarget = batchTarget; snap.batchCount = batchCount;
+  snap.batchActive = batchActive;
+
+  char buf[1024];
+  int written = buildStateJSON(snap, buf, sizeof(buf));
   if (written >= (int)sizeof(buf)) {
     Serial.printf("WARN: state JSON truncated (%d >= %d)\n", written, (int)sizeof(buf));
   }
@@ -671,12 +672,12 @@ void setupWebServer() {
   });
 
   events.onConnect([](AsyncEventSourceClient *client) {
-    client->send(buildStateJSON().c_str(), NULL, millis(), 500);
+    client->send(buildStateJSONString().c_str(), NULL, millis(), 500);
   });
   webServer.addHandler(&events);
 
   webServer.on("/api/state", HTTP_GET, [](AsyncWebServerRequest *req) {
-    req->send(200, "application/json", buildStateJSON());
+    req->send(200, "application/json", buildStateJSONString());
   });
 
   webServer.on("/api/toggle_run", HTTP_POST, [](AsyncWebServerRequest *req) {
@@ -986,7 +987,7 @@ void broadcastState() {
   if ((now - lastSSEMs) < SSE_INTERVAL_MS) return;
   lastSSEMs = now;
   if (events.count() == 0) return;
-  events.send(buildStateJSON().c_str(), NULL, millis());
+  events.send(buildStateJSONString().c_str(), NULL, millis());
 
   // Send only NEW log lines since last broadcast
   if (logSerial > logSentSerial) {

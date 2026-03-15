@@ -102,20 +102,26 @@ AutoLee/
 │   ├── config.h              # Pin defs, constants, speed profile struct
 │   ├── motor_fsm.h           # Motor state machine (IDLE/RUNNING/STOPPING/…)
 │   ├── motor.h               # Motor control, calibration, homing routines
+│   ├── stall_monitor.h       # Runtime stall detection sliding counter + blanking
+│   ├── calibration.h         # Calibration hit detection (early + baseline + dynamic)
 │   ├── batch.h               # Batch run state machine
 │   ├── sg_filter.h           # StallGuard median-of-5 filter + helpers
 │   ├── endpoint_math.h       # Endpoint clamping and offset math
 │   ├── log_ring.h            # Ring buffer for the 500-line log
+│   ├── state_json.h          # Pure JSON state serialization
 │   ├── theme.h               # UI theme constants (colors, sizes)
 │   ├── ui.h                  # LVGL touchscreen UI (all screens)
 │   └── web.h                 # Web server, SSE, OTA, WiFi config
 ├── test/
 │   └── test_native/
-│       ├── test_motor_fsm/   # 28 tests — state transitions, guards, edge cases
+│       ├── test_motor_fsm/   # 29 tests — state transitions, guards, edge cases
+│       ├── test_stall_monitor/ # 20 tests — blanking windows, sliding counter, jam
+│       ├── test_calibration/ # 19 tests — early trip, baseline, dynamic hit
 │       ├── test_batch/       # 15 tests — batch counting, start/clear/done
 │       ├── test_sg_filter/   # 16 tests — median filter, SG helpers
 │       ├── test_endpoint_math/ # 15 tests — clamping, offset logic
 │       ├── test_log_ring/    # 10 tests — ring buffer push/wrap/clear
+│       ├── test_state_json/  # 14 tests — JSON serialization, truncation
 │       └── test_main/        # Smoke test
 ├── tools/
 │   └── mock_server.py        # Mock web UI server (no hardware needed)
@@ -133,10 +139,13 @@ The core logic is split into **pure, header-only modules** that can be compiled 
 | Module | Responsibility |
 |---|---|
 | `motor_fsm.h` | Explicit state machine with typed `MotorState` / `MotorEvent` enums and a transition table. Guards like `canRun()` and `isMoving()` prevent invalid operations. |
+| `stall_monitor.h` | Runtime stall detection — sliding high/low counter with accel, work-zone, and decel blanking windows. Returns `BLANKED`, `OK`, or `JAM`. |
+| `calibration.h` | Calibration hit detection — three-phase detector: early trip (immediate wall), baseline tracking with dynamic threshold, and confirmation counting. |
 | `batch.h` | Batch run counting — tracks target, completed count, and done/active state. |
-| `sg_filter.h` | Median-of-5 filter for StallGuard SPI reads, plus sliding-counter stall detection helpers. |
+| `sg_filter.h` | Median-of-5 filter for StallGuard SPI reads, plus blanking helper functions. |
 | `endpoint_math.h` | Pure math for endpoint offset clamping and position calculations. |
 | `log_ring.h` | Fixed-size ring buffer for log lines with wrap-around and clear. |
+| `state_json.h` | Pure JSON serialization of device state — takes a `StateSnapshot` struct, produces JSON string. |
 
 The heavier hardware-dependent modules (`motor.h`, `ui.h`, `web.h`) are separated for readability but compile only on ESP32.
 
@@ -335,10 +344,13 @@ just test
 
 # Run one suite
 just test-one motor_fsm
+just test-one stall_monitor
+just test-one calibration
 just test-one batch
 just test-one sg_filter
 just test-one endpoint_math
 just test-one log_ring
+just test-one state_json
 ```
 
 The test suites cover state transitions, boundary conditions, overflow behavior, and edge cases across all extracted modules.
@@ -349,7 +361,7 @@ The test suites cover state transitions, boundary conditions, overflow behavior,
 
 | Version | Changes |
 |---|---|
-| **v1.6** | Modular architecture (motor FSM, batch, SG filter, endpoint math, log ring extracted as testable headers); multi-page touch UI; adjustable motor current; updated speed profiles (15k/35k/45k); PlatformIO build system with `just` task runner; 84+ native unit tests; mock web server for UI development |
+| **v1.6** | Modular architecture (motor FSM, stall monitor, calibration detector, batch, SG filter, endpoint math, log ring, state JSON extracted as testable headers); multi-page touch UI; adjustable motor current; updated speed profiles (15k/35k/45k); PlatformIO build system with `just` task runner; 140 native unit tests; mock web server for UI development |
 | **v1.5** | Speed profiles (Slow/Normal/Fast) replace speed slider; per-profile SG thresholds; profile API |
 | **v1.4** | Captive portal WiFi; work zone SG blanking; RUN_DECEL 800k; median-of-5 SPI filter; sliding counter stall detection; 500-line log; redesigned web UI |
 | **v1.3** | Batch run; jam screen with return-home; runtime StallGuard monitoring; web log viewer |

@@ -4,6 +4,17 @@
 // ============================================================================
 
 #include "config.h"
+#include "stall_monitor.h"
+#include "calibration.h"
+
+static StallMonitor stallMon;
+
+static const CalibrationConfig calCfg = {
+  EARLY_WINDOW_MS, EARLY_WINDOW_DST_MAX,
+  EARLY_MIN_TIME_MS, EARLY_MIN_MOVE_STEPS,
+  EARLY_TRIP, CAL_HIT_CONFIRM,
+  CAL_ABS_MIN, CAL_REL_DROP_Q8, 200
+};
 
 // --- Forward declarations for functions defined in other modules ---
 void webLog(const char *fmt, ...);
@@ -70,7 +81,7 @@ bool startRunBetweenEndpoints() {
   if (!stepper) { webLog("RUN: no stepper"); return false; }
   if (!endpointsCalibrated) { webLog("RUN: not calibrated"); return false; }
   runState = RUNNING;
-  runSGHighCount = 0; runSGLowCount = 0;
+  stallMon.reset();
   lastSGPrintMs = 0;
   lastDirectionChangeMs = millis();
 
@@ -128,89 +139,56 @@ void handleMotion() {
         }
         currentTarget = flipTarget(currentTarget);
         lastDirectionChangeMs = millis();
-        runSGHighCount = 0; runSGLowCount = 0;
+        stallMon.reset();
         stepper->setSpeedInHz(ui_speed_hz);
         stepper->setAcceleration(RUN_ACCEL);
         stepper->moveTo(currentTarget);
         break;
       }
 
-      // --- Runtime stall detection ---
+      // --- Runtime stall detection (via StallMonitor) ---
       if (RUN_SG_TRIP == 0) break;
 
       uint32_t sinceChange = millis() - lastDirectionChangeMs;
 
-      // Accel blank: skip SG for (speed/accel) + 80ms while motor accelerates
-      uint32_t accelWindowMs = (uint32_t)((uint64_t)ui_speed_hz * 1000ULL / (uint64_t)RUN_ACCEL) + 80;
-      if (sinceChange < accelWindowMs) break;
-
-      // Work zone: skip SG near the DOWN endpoint where the tool does work
-      // (primer push etc.) — normal resistance here would false-trigger.
-      // Only applies when heading toward DOWN, not toward UP.
-      if (currentTarget == endpointDown) {
-        int32_t distToDown = labs(pos - endpointDown);
-        if (distToDown < SG_WORK_ZONE_STEPS) {
-          runSGHighCount = 0; runSGLowCount = 0;
-          break;
-        }
-      }
-
-      // Decel blank: skip SG near target (decel distance + margin).
-      // Exception: if jam evidence already accumulated, keep monitoring.
-      {
-        int32_t distToTarget = labs(pos - currentTarget);
-        int32_t decelDist = (int32_t)((uint64_t)ui_speed_hz * ui_speed_hz / (2ULL * (uint64_t)RUN_ACCEL));
-        int32_t decelBlank = decelDist + 500;  // margin for planner timing
-        if (distToTarget < decelBlank && runSGHighCount < RUN_SG_HIGH_NEEDED) {
-          runSGHighCount = 0; runSGLowCount = 0;
-          break;
-        }
-      }
+      if (stallMon.checkBlanking(pos, currentTarget, endpointDown,
+                                 sinceChange, ui_speed_hz, RUN_ACCEL,
+                                 SG_WORK_ZONE_STEPS, RUN_SG_HIGH_NEEDED))
+        break;
 
       uint16_t sg = read_sg();
-      if (sg <= 1) break;
 
       // Debug: print SG every 500ms
-      if ((millis() - lastSGPrintMs) > 500) {
+      if (sg > 1 && (millis() - lastSGPrintMs) > 500) {
         int32_t distToTarget = labs(pos - currentTarget);
         webLog("RUN SG=%u trip=%u pos=%ld dist=%ld t=%lu hi=%u/%u",
                sg, RUN_SG_TRIP, pos, distToTarget, sinceChange,
-               runSGHighCount, RUN_SG_HIGH_NEEDED);
+               stallMon.highCount, RUN_SG_HIGH_NEEDED);
         lastSGPrintMs = millis();
       }
 
-      if (sg > RUN_SG_TRIP) {
-        if (runSGHighCount < RUN_SG_HIGH_NEEDED + 4) runSGHighCount++;
-        runSGLowCount = 0;
+      StallAction action = stallMon.processSG(sg, RUN_SG_TRIP, RUN_SG_HIGH_NEEDED);
 
+      if (action == StallAction::JAM) {
+        webLog("JAM! SG=%u trip=%u pos=%ld tgt=%ld cnt=%u",
+                      sg, RUN_SG_TRIP, pos, currentTarget, stallMon.highCount);
+
+        stepper->forceStop();
+        fas_wait_for_stop();
+
+        stepper->setSpeedInHz(CREEP_HOME_SPEED);
+        stepper->setAcceleration(CREEP_HOME_ACCEL);
+
+        int32_t backoff = (currentTarget == endpointDown) ? -RUN_BACKOFF_STEPS : +RUN_BACKOFF_STEPS;
+        stepper->move(backoff);
+        fas_wait_for_stop();
+
+        runState = STALLED;
+        stallMon.reset();
+        showJamScreen();
+      } else if (sg > RUN_SG_TRIP) {
         webLog("SG HIGH=%u trip=%u cnt=%u pos=%ld t=%lu",
-               sg, RUN_SG_TRIP, runSGHighCount, pos, sinceChange);
-
-        if (runSGHighCount >= RUN_SG_HIGH_NEEDED) {
-          // JAM — trigger immediately, no sustain timer
-          webLog("JAM! SG=%u trip=%u pos=%ld tgt=%ld cnt=%u",
-                        sg, RUN_SG_TRIP, pos, currentTarget, runSGHighCount);
-
-          stepper->forceStop();
-          fas_wait_for_stop();
-
-          stepper->setSpeedInHz(CREEP_HOME_SPEED);
-          stepper->setAcceleration(CREEP_HOME_ACCEL);
-
-          int32_t backoff = (currentTarget == endpointDown) ? -RUN_BACKOFF_STEPS : +RUN_BACKOFF_STEPS;
-          stepper->move(backoff);
-          fas_wait_for_stop();
-
-          runState = STALLED;
-          runSGHighCount = 0; runSGLowCount = 0;
-          showJamScreen();
-        }
-      } else {
-        runSGLowCount++;
-        if (runSGLowCount >= 3) {
-          runSGLowCount = 0;
-          if (runSGHighCount > 0) runSGHighCount--;
-        }
+               sg, RUN_SG_TRIP, stallMon.highCount, pos, sinceChange);
       }
       break;
     }
@@ -257,13 +235,9 @@ bool move_until_stall(int dir, long &hit_pos) {
   const uint32_t start_ms = millis();
   delay(5);
 
-  bool baseline_started = false;
-  uint32_t base_start_ms = 0, base_sum = 0;
-  uint16_t base_cnt = 0;
-  bool dyn_ready = false;
-  uint16_t dyn_trip = CAL_ABS_MIN;
-  uint8_t confirm_dyn = 0, confirm_early = 0;
+  CalibrationDetector calDet(calCfg.absMin);
   uint32_t lastMUSPrint = start_ms;
+  bool prevDynReady = false;
 
   while (stepper->isRunning()) {
     const uint32_t now = millis();
@@ -274,52 +248,28 @@ bool move_until_stall(int dir, long &hit_pos) {
     // Periodic debug during search
     if ((now - lastMUSPrint) > 400) {
       webLog("MUS: sg=%u dist=%ld el=%lu bl=%d dr=%d dtrip=%u",
-             sg, dist, elapsed_ms, baseline_started, dyn_ready, dyn_trip);
+             sg, dist, elapsed_ms, calDet.baselineStarted, calDet.dynReady, calDet.dynTrip);
       lastMUSPrint = now;
     }
 
-    // Early trip
-    if (elapsed_ms <= EARLY_WINDOW_MS && dist <= EARLY_WINDOW_DST_MAX) {
-      if (elapsed_ms >= EARLY_MIN_TIME_MS && dist >= EARLY_MIN_MOVE_STEPS) {
-        if (sg <= EARLY_TRIP) {
-          if (++confirm_early >= CAL_HIT_CONFIRM) {
-            webLog("MUS: EARLY HIT sg=%u pos=%ld", sg, stepper->getCurrentPosition());
-            stepper->forceStop(); fas_wait_for_stop();
-            hit_pos = stepper->getCurrentPosition();
-            return true;
-          }
-        } else confirm_early = 0;
-      }
-    }
+    CalibrationResult result = calDet.process(sg, now, elapsed_ms, dist,
+                                              ignore_ms, ignore_dst, calCfg);
 
-    // Baseline
-    if (!baseline_started && elapsed_ms > ignore_ms && dist > ignore_dst) {
-      baseline_started = true;
-      base_start_ms = now;
-      base_sum = 0; base_cnt = 0; confirm_dyn = 0;
+    if (result == CalibrationResult::EARLY_HIT) {
+      webLog("MUS: EARLY HIT sg=%u pos=%ld", sg, stepper->getCurrentPosition());
+      stepper->forceStop(); fas_wait_for_stop();
+      hit_pos = stepper->getCurrentPosition();
+      return true;
     }
-    if (baseline_started && !dyn_ready) {
-      base_sum += sg;
-      if (base_cnt < 1000) base_cnt++;
-      if ((now - base_start_ms) >= 200 && base_cnt > 0) {
-        uint16_t baseline = min((uint16_t)(base_sum / base_cnt), (uint16_t)1023);
-        uint16_t rel_trip = (uint16_t)((baseline * (uint32_t)CAL_REL_DROP_Q8) >> 8);
-        dyn_trip = max(rel_trip, CAL_ABS_MIN);
-        dyn_ready = true;
-        webLog("MUS: baseline=%u dyn_trip=%u", baseline, dyn_trip);
-      }
+    if (result == CalibrationResult::DYN_HIT) {
+      webLog("MUS: DYN HIT sg=%u trip=%u pos=%ld", sg, calDet.dynTrip, stepper->getCurrentPosition());
+      stepper->forceStop(); fas_wait_for_stop();
+      hit_pos = stepper->getCurrentPosition();
+      return true;
     }
-
-    // Dynamic stall
-    if (dyn_ready) {
-      if (sg <= dyn_trip) {
-        if (++confirm_dyn >= CAL_HIT_CONFIRM) {
-          webLog("MUS: DYN HIT sg=%u trip=%u pos=%ld", sg, dyn_trip, stepper->getCurrentPosition());
-          stepper->forceStop(); fas_wait_for_stop();
-          hit_pos = stepper->getCurrentPosition();
-          return true;
-        }
-      } else confirm_dyn = 0;
+    if (calDet.dynReady && !prevDynReady) {
+      webLog("MUS: baseline dyn_trip=%u", calDet.dynTrip);
+      prevDynReady = true;
     }
 
     lv_timer_handler();

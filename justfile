@@ -12,7 +12,7 @@ setup:
 
 # Run all native unit tests
 test:
-    pio test -e native --filter "test_native/test_*" -v
+    pio test -e native -v
 
 # Run a single test suite (e.g. just test-one motor_fsm)
 test-one suite:

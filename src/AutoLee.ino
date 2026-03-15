@@ -65,8 +65,6 @@ static int32_t SG_WORK_ZONE_STEPS = 5500;  // skip SG this many steps before end
 
 static uint32_t lastDirectionChangeMs = 0;
 static uint32_t lastSGPrintMs = 0;         // reset per run; used by handleMotion()
-static uint8_t  runSGHighCount = 0;        // sliding counter of above-trip readings
-static uint8_t  runSGLowCount = 0;         // consecutive below-threshold readings (for slow decrement)
 
 // Jam screen
 static lv_obj_t *jam_scr = nullptr;
