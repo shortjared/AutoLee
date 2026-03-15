@@ -64,7 +64,7 @@ static constexpr int32_t CAL_PREMOVE_DOWN_STEPS = 5500;
 // ==========================================================================
 
 static constexpr int8_t   CAL_SGT          = -1;
-static uint16_t           RUN_CURRENT_MA   = 2500;
+static uint16_t           RUN_CURRENT_MA   = 3500;
 static constexpr uint16_t RUN_CURRENT_MIN  = 1000;
 static constexpr uint16_t RUN_CURRENT_MAX  = 4500;
 static constexpr uint16_t CAL_CURRENT_MA   = 3200;

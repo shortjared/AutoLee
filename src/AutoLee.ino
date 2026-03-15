@@ -92,7 +92,7 @@ static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *disp_draw_buf = nullptr;
 static lv_disp_drv_t disp_drv;
 
-static lv_obj_t *main_scr = nullptr, *settings_scr = nullptr, *profile_scr = nullptr;
+static lv_obj_t *main_scr = nullptr, *settings_scr = nullptr, *config_scr = nullptr, *profile_scr = nullptr;
 static lv_obj_t *tuning_scr = nullptr, *ep_up_scr = nullptr, *ep_dn_scr = nullptr;
 static lv_obj_t *wifi_scr = nullptr;
 static lv_obj_t *counter_label = nullptr, *main_warn = nullptr, *main_warn_lbl = nullptr;
