@@ -1,8 +1,8 @@
 // ============================================================================
-//  AutoLee v1.5
+//  AutoLee v1.6
 // ============================================================================
 
-#define FW_VERSION "1.5"
+#define FW_VERSION "1.6"
 
 // --- Library includes ---
 #include <lvgl.h>
@@ -31,9 +31,9 @@ enum RunState : uint8_t { IDLE, RUNNING, STOPPING, CALIBRATING, STALLED, HOMING 
 // ==========================================================================
 
 static SpeedProfile profiles[NUM_PROFILES] = {
-  { "Slow",   30000, 80, 80 },
-  { "Normal", 40000, 80, 80 },
-  { "Fast",   50000, 80, 80 },
+  { "Slow",   15000, 350, 350 },
+  { "Normal", 35000, 15, 15 },
+  { "Fast",   45000, 1, 1 },
 };
 static uint8_t activeProfile = 1;  // default to Normal
 
@@ -129,6 +129,9 @@ static volatile bool webBatchStartRequested = false;
 static volatile bool webBatchClearRequested = false;
 static volatile bool webCounterResetRequested = false;
 static volatile bool webLogClearRequested = false;
+static volatile bool webCurrentMaPending = false;
+static volatile uint16_t webCurrentMaValue = 0;
+static volatile bool webSgTripAbsolute = false;  // when true, webSgTripDelta holds absolute value
 static uint32_t     rebootRequestMs = 0;
 
 // --- Batch run ---

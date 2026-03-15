@@ -394,6 +394,7 @@ void ui_build_all_screens() {
   lv_obj_set_style_text_font(lbl_speed_val, &lv_font_montserrat_14, LV_PART_MAIN);
   lv_obj_set_style_text_color(lbl_speed_val, lv_color_hex(Theme::SPEED_TXT), LV_PART_MAIN);
   lv_obj_set_style_text_align(lbl_speed_val, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_set_width(lbl_speed_val, SCR_W - 20);
   lv_obj_align_to(lbl_speed_val, sub, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
 
   ui_create_main_warning(mc);
@@ -403,7 +404,7 @@ void ui_build_all_screens() {
   lv_label_set_text_fmt(counter_label, "%ld", min(counter, 9999L));
   lv_obj_set_style_text_font(counter_label, &lv_font_montserrat_48, LV_PART_MAIN);
   lv_obj_set_style_text_color(counter_label, lv_color_hex(Theme::GREEN), LV_PART_MAIN);
-  lv_obj_align(counter_label, LV_ALIGN_CENTER, 0, -30);
+  lv_obj_align(counter_label, LV_ALIGN_CENTER, 0, -10);
   // Long-press counter to reset (make label clickable first)
   lv_obj_add_flag(counter_label, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(counter_label, [](lv_event_t *e) {
@@ -418,7 +419,7 @@ void ui_build_all_screens() {
   lv_obj_set_style_text_font(lbl_batch_remain, &lv_font_montserrat_14, LV_PART_MAIN);
   lv_obj_set_style_text_color(lbl_batch_remain, lv_color_hex(Theme::WARN_TEXT), LV_PART_MAIN);
   lv_obj_set_style_text_align(lbl_batch_remain, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-  lv_obj_align(lbl_batch_remain, LV_ALIGN_CENTER, 0, 10);
+  lv_obj_align(lbl_batch_remain, LV_ALIGN_CENTER, 0, 26);
   lv_obj_add_flag(lbl_batch_remain, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_t *btn_batch = make_btn(mc, "Batch Run", 140, 36, Theme::ACCENT, &lv_font_montserrat_16);

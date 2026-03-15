@@ -142,15 +142,19 @@ void startWiFi() {
 // ==========================================================================
 String buildStateJSON() {
   char buf[1024];
+  const char *wfStat = wifiConnected ? "Connected" : (wifiAPMode ? "AP Mode" : "Disconnected");
+  String wfSSID = wifiConnected ? WiFi.SSID() : (wifiAPMode ? String(DEFAULT_AP_SSID) : String("\xe2\x80\x94"));
+  String wfIP = wifiConnected ? WiFi.localIP().toString() : (wifiAPMode ? WiFi.softAPIP().toString() : String("\xe2\x80\x94"));
   int written = snprintf(buf, sizeof(buf),
     "{\"version\":\"%s\",\"state\":\"%s\",\"counter\":%ld,\"speed\":%lu,\"calibrated\":%s,"
     "\"rawUp\":%ld,\"rawDown\":%ld,\"endpointUp\":%ld,\"endpointDown\":%ld,"
     "\"upOffset\":%ld,\"downOffset\":%ld,\"position\":%ld,\"sgTrip\":%u,"
-    "\"workZone\":%ld,"
+    "\"workZone\":%ld,\"currentMa\":%u,"
     "\"profileIdx\":%u,\"profileName\":\"%s\","
     "\"profiles\":[{\"name\":\"Slow\",\"hz\":%lu,\"sg\":%u},"
     "{\"name\":\"Normal\",\"hz\":%lu,\"sg\":%u},"
     "{\"name\":\"Fast\",\"hz\":%lu,\"sg\":%u}],"
+    "\"wifiStatus\":\"%s\",\"wifiSSID\":\"%s\",\"wifiIP\":\"%s\","
     "\"batchTarget\":%ld,\"batchCount\":%ld,\"batchActive\":%s}",
     FW_VERSION,
     runState==RUNNING?"RUNNING":runState==STOPPING?"STOPPING":runState==CALIBRATING?"CALIBRATING":runState==STALLED?"STALLED":runState==HOMING?"HOMING":"IDLE",
@@ -159,11 +163,12 @@ String buildStateJSON() {
     (long)upOffsetSteps, (long)downOffsetSteps,
     stepper ? stepper->getCurrentPosition() : 0L,
     RUN_SG_TRIP,
-    (long)SG_WORK_ZONE_STEPS,
+    (long)SG_WORK_ZONE_STEPS, RUN_CURRENT_MA,
     activeProfile, profiles[activeProfile].name,
     (unsigned long)profiles[0].speed_hz, profiles[0].sg_trip,
     (unsigned long)profiles[1].speed_hz, profiles[1].sg_trip,
     (unsigned long)profiles[2].speed_hz, profiles[2].sg_trip,
+    wfStat, wfSSID.c_str(), wfIP.c_str(),
     batchTarget, batchCount,
     batchActive ? "true" : "false");
   if (written >= (int)sizeof(buf)) {
@@ -216,12 +221,22 @@ input[type=text],input[type=password]{width:100%;padding:10px;margin-bottom:6px;
 .pbar{width:100%;height:5px;background:#333;border-radius:3px;margin-top:6px;overflow:hidden;display:none}
 .pbar .fill{height:100%;background:var(--accent);width:0%;transition:width .3s;border-radius:3px}
 #otaS{font-size:.8em;margin-top:4px;min-height:1em}
-.log{background:#000;border-radius:8px;padding:8px;font-family:'Courier New',monospace;font-size:.7em;color:#0f0;height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.log{background:#000;border-radius:8px;padding:8px;font-family:'Courier New',monospace;font-size:.7em;color:#0f0;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.page{display:none}.page.active{display:block}
+.nav-footer{margin-top:16px;padding:14px 0;text-align:center;border-top:1px solid var(--border)}
+.nav-footer a{color:var(--accent);text-decoration:none;font-size:.85em;font-weight:600;margin:0 10px;cursor:pointer}
+.nav-footer a:hover{opacity:.7}
+.nav-footer a.active{color:var(--green)}
+.back-link{display:inline-block;color:var(--accent);font-size:.85em;font-weight:600;cursor:pointer;margin-bottom:12px;text-decoration:none}
+.back-link:hover{opacity:.7}
 </style></head><body>
 <div class="wrap">
 
 <h1>AutoLee</h1>
 <div class="sub">by K.L Design · <span id="ver"></span></div>
+
+<!-- ==================== MAIN PAGE ==================== -->
+<div id="pageMain" class="page active">
 
 <!-- STATUS + COUNTER + RUN -->
 <div class="sec">
@@ -235,6 +250,23 @@ input[type=text],input[type=password]{width:100%;padding:10px;margin-bottom:6px;
 <div style="color:#aaa;font-size:.8em;margin-bottom:8px">Motor stalled and backed off.</div>
 <button class="btn btn-blue" onclick="doAct('return_home')" id="bh">Return Home</button>
 </div>
+<div class="row ctr" style="margin-top:10px;gap:8px">
+<button class="btn btn-dark" onclick="doAct('calibrate')" id="bc">Calibrate</button>
+<button class="btn btn-red" onclick="doAct('reset_counter')">Reset Counter</button></div>
+<hr>
+<h2 style="margin-top:8px">Batch Run</h2>
+<div class="sr"><span class="l">Target</span><span class="v" id="btv">OFF</span></div>
+<div id="btStatus" class="hint"></div>
+<div class="ea">
+<button class="btn btn-dark btn-sm" onclick="setBatch(-100)">-100</button>
+<button class="btn btn-dark btn-sm" onclick="setBatch(-10)">-10</button>
+<button class="btn btn-dark btn-sm" onclick="setBatch(-1)">-1</button>
+<button class="btn btn-blue btn-sm" onclick="setBatch(1)">+1</button>
+<button class="btn btn-blue btn-sm" onclick="setBatch(10)">+10</button>
+<button class="btn btn-blue btn-sm" onclick="setBatch(100)">+100</button></div>
+<div class="row ctr" style="margin-top:8px;gap:6px">
+<button class="btn btn-blue btn-sm" onclick="doBatch('start')" id="bbStart">Start Batch</button>
+<button class="btn btn-dark btn-sm" onclick="doBatch('clear')">Clear</button></div>
 </div>
 
 <!-- SPEED PROFILE -->
@@ -244,9 +276,34 @@ input[type=text],input[type=password]{width:100%;padding:10px;margin-bottom:6px;
 <div class="sr"><span class="l">Active</span><span class="v" id="sv">-</span></div>
 </div>
 
-<!-- TUNING (collapsible) -->
+<!-- NAV FOOTER -->
+<div class="nav-footer">
+<a onclick="showPage('pageConfig')">Configuration</a>
+<a onclick="showPage('pageLog')">Log</a>
+<a onclick="showPage('pageFW')">Firmware</a>
+<a onclick="showPage('pageWifi')">WiFi</a>
+</div>
+
+</div><!-- /pageMain -->
+
+<!-- ==================== CONFIGURATION PAGE ==================== -->
+<div id="pageConfig" class="page">
+<a class="back-link" onclick="showPage('pageMain')">&#8592; Back</a>
+
+<!-- MOTOR CURRENT -->
 <div class="sec">
-<h2>Tuning</h2>
+<h2>Motor Current</h2>
+<div class="slider-row">
+<input type="range" id="mcSlider" min="1000" max="4500" step="100" value="2500" oninput="setCurrent(this.value)">
+<span id="mcv">2500</span>
+</div>
+<div class="hint">Run current in mA (1000–4500). Higher = more torque, more heat.</div>
+<div id="mcWarn" style="display:none;background:#3A2B12;border-radius:6px;padding:6px 10px;margin-top:6px;font-size:.8em;color:#FFD37C">&#9888; Above 4000 mA exceeds motor rating. Ensure adequate cooling.</div>
+</div>
+
+<!-- ENDPOINT TUNING -->
+<div class="sec">
+<h2>Endpoint Tuning</h2>
 <div class="sr"><span class="l">Position</span><span class="v" id="cp">-</span></div>
 <div class="sr"><span class="l">Effective UP</span><span class="v" id="eu">-</span></div>
 <div class="sr"><span class="l">Effective DOWN</span><span class="v" id="ed">-</span></div>
@@ -274,7 +331,7 @@ input[type=text],input[type=password]{width:100%;padding:10px;margin-bottom:6px;
 </details>
 </div>
 
-<!-- STALL + WORK ZONE -->
+<!-- STALL GUARD + WORK ZONE -->
 <div class="sec">
 <h2>Stall Guard (per profile)</h2>
 <div id="sgProfiles"></div>
@@ -288,57 +345,89 @@ input[type=text],input[type=password]{width:100%;padding:10px;margin-bottom:6px;
 <button class="btn btn-blue btn-sm" onclick="setWz(500)">+500</button></div>
 </div>
 
-<!-- BATCH -->
-<div class="sec">
-<h2>Batch Run</h2>
-<div class="sr"><span class="l">Target</span><span class="v" id="btv">OFF</span></div>
-<div id="btStatus" class="hint"></div>
-<div class="ea">
-<button class="btn btn-dark btn-sm" onclick="setBatch(-100)">-100</button>
-<button class="btn btn-dark btn-sm" onclick="setBatch(-10)">-10</button>
-<button class="btn btn-dark btn-sm" onclick="setBatch(-1)">-1</button>
-<button class="btn btn-blue btn-sm" onclick="setBatch(1)">+1</button>
-<button class="btn btn-blue btn-sm" onclick="setBatch(10)">+10</button>
-<button class="btn btn-blue btn-sm" onclick="setBatch(100)">+100</button></div>
-<div class="row ctr" style="margin-top:8px;gap:6px">
-<button class="btn btn-blue btn-sm" onclick="doBatch('start')" id="bbStart">Start Batch</button>
-<button class="btn btn-dark btn-sm" onclick="doBatch('clear')">Clear</button></div>
+<!-- NAV FOOTER -->
+<div class="nav-footer">
+<a onclick="showPage('pageMain')">Main</a>
+<a onclick="showPage('pageLog')">Log</a>
+<a onclick="showPage('pageFW')">Firmware</a>
+<a onclick="showPage('pageWifi')">WiFi</a>
 </div>
 
-<!-- ACTIONS -->
-<div class="sec">
-<h2>Actions</h2>
-<div class="row ctr" style="gap:8px">
-<button class="btn btn-dark" onclick="doAct('calibrate')" id="bc">Calibrate</button>
-<button class="btn btn-red" onclick="doAct('reset_counter')">Reset Counter</button></div>
-</div>
+</div><!-- /pageConfig -->
 
-<!-- LOG (collapsible) -->
+<!-- ==================== LOG PAGE ==================== -->
+<div id="pageLog" class="page">
+<a class="back-link" onclick="showPage('pageMain')">&#8592; Back</a>
+
 <div class="sec">
-<details><summary>Log</summary>
+<h2>Log</h2>
 <div class="log" id="logBox"></div>
-<button class="btn btn-dark btn-sm" onclick="document.getElementById('logBox').textContent='';fetch('/api/log_clear',{method:'POST'})" style="margin-top:6px;width:100%">Clear Log</button>
-</details>
+<button class="btn btn-dark btn-sm" onclick="document.getElementById('logBox').textContent='';fetch('/api/log_clear',{method:'POST'})" style="margin-top:8px;width:100%">Clear Log</button>
 </div>
 
-<!-- WIFI + OTA (collapsible) -->
+<!-- NAV FOOTER -->
+<div class="nav-footer">
+<a onclick="showPage('pageMain')">Main</a>
+<a onclick="showPage('pageConfig')">Configuration</a>
+<a onclick="showPage('pageFW')">Firmware</a>
+<a onclick="showPage('pageWifi')">WiFi</a>
+</div>
+
+</div><!-- /pageLog -->
+
+<!-- ==================== FIRMWARE PAGE ==================== -->
+<div id="pageFW" class="page">
+<a class="back-link" onclick="showPage('pageMain')">&#8592; Back</a>
+
 <div class="sec">
-<details><summary>WiFi &amp; Firmware</summary>
-<div class="hint" style="margin-bottom:8px">Change WiFi (reboot required)</div>
-<input type="text" id="ns" placeholder="SSID">
-<input type="password" id="np" placeholder="Password">
-<div class="row" style="gap:6px;margin-bottom:12px">
-<button class="btn btn-blue btn-sm" onclick="saveWifi()" style="flex:1">Save &amp; Reboot</button>
-<button class="btn btn-red btn-sm" onclick="resetWifi()" style="flex:1">Reset WiFi</button></div>
-<hr>
-<div class="hint" style="margin:8px 0">Firmware update (OTA)</div>
+<h2>Firmware Update (OTA)</h2>
 <div class="upload" id="ua" onclick="document.getElementById('fw').click()">
 Tap to select .bin<br><span style="font-size:.8em">or drag &amp; drop</span></div>
 <input type="file" id="fw" accept=".bin" style="display:none" onchange="upFW(this.files[0])">
 <div class="pbar" id="pb"><div class="fill" id="pf"></div></div>
 <div id="otaS"></div>
-</details>
 </div>
+
+<!-- NAV FOOTER -->
+<div class="nav-footer">
+<a onclick="showPage('pageMain')">Main</a>
+<a onclick="showPage('pageConfig')">Configuration</a>
+<a onclick="showPage('pageLog')">Log</a>
+<a onclick="showPage('pageWifi')">WiFi</a>
+</div>
+
+</div><!-- /pageFW -->
+
+<!-- ==================== WIFI PAGE ==================== -->
+<div id="pageWifi" class="page">
+<a class="back-link" onclick="showPage('pageMain')">&#8592; Back</a>
+
+<div class="sec">
+<h2>Connection</h2>
+<div class="sr"><span class="l">Status</span><span class="v" id="wfStatus">—</span></div>
+<div class="sr"><span class="l">SSID</span><span class="v" id="wfSSID">—</span></div>
+<div class="sr"><span class="l">IP Address</span><span class="v" id="wfIP">—</span></div>
+</div>
+
+<div class="sec">
+<h2>WiFi Settings</h2>
+<div class="hint" style="margin-bottom:8px">Change WiFi credentials (reboot required)</div>
+<input type="text" id="ns" placeholder="SSID">
+<input type="password" id="np" placeholder="Password">
+<div class="row" style="gap:6px">
+<button class="btn btn-blue btn-sm" onclick="saveWifi()" style="flex:1">Save &amp; Reboot</button>
+<button class="btn btn-red btn-sm" onclick="resetWifi()" style="flex:1">Reset WiFi</button></div>
+</div>
+
+<!-- NAV FOOTER -->
+<div class="nav-footer">
+<a onclick="showPage('pageMain')">Main</a>
+<a onclick="showPage('pageConfig')">Configuration</a>
+<a onclick="showPage('pageLog')">Log</a>
+<a onclick="showPage('pageFW')">Firmware</a>
+</div>
+
+</div><!-- /pageWifi -->
 
 </div>
 
@@ -349,37 +438,69 @@ es.addEventListener('log',e=>{try{const d=JSON.parse(e.data);const lb=document.g
 es.onerror=()=>{es.close();const sb=document.getElementById('sb');if(sb){sb.textContent='RECONNECTING';sb.className='badge stall'}setTimeout(sse,3000)}}
 sse();
 
+function showPage(id){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
 
+let profBuilt=false;
 function buildProfileBtns(profiles,activeIdx){
   const row=document.getElementById('profileRow');
   if(!row)return;
+  if(profBuilt){
+    profiles.forEach((p,i)=>{
+      const b=document.getElementById('profBtn'+i);
+      if(b) b.className='btn '+(i===activeIdx?'btn-blue':'btn-dark')+' btn-sm';
+    });
+    return;
+  }
   row.innerHTML='';
   profiles.forEach((p,i)=>{
     const b=document.createElement('button');
+    b.id='profBtn'+i;
     b.className='btn '+(i===activeIdx?'btn-blue':'btn-dark')+' btn-sm';
     b.style.cssText='flex:1;padding:10px 4px';
     b.innerHTML=p.name+'<br><span style="font-size:.75em;opacity:.7">'+Math.round(p.hz/1000)+'kHz</span>';
     b.onclick=()=>setProfile(i);
     row.appendChild(b);
   });
+  profBuilt=true;
 }
 
+let sgBuilt=false;
 function buildSgControls(profiles,activeIdx){
   const c=document.getElementById('sgProfiles');
   if(!c)return;
+  if(sgBuilt){
+    profiles.forEach((p,i)=>{
+      const isActive=i===activeIdx;
+      const lbl=document.getElementById('sgLbl'+i);
+      const inp=document.getElementById('sgIn'+i);
+      const row=document.getElementById('sgRow'+i);
+      if(lbl) lbl.innerHTML=p.name+' ('+Math.round(p.hz/1000)+'kHz) <span style="color:'+(isActive?'var(--green)':'var(--muted)')+'">SG='+p.sg+'</span>';
+      if(row) row.style.background=isActive?'#1a2a3a':'#161616';
+      if(inp && document.activeElement!==inp) inp.value=p.sg;
+    });
+    return;
+  }
   c.innerHTML='';
   profiles.forEach((p,i)=>{
     const isActive=i===activeIdx;
     const div=document.createElement('div');
+    div.id='sgRow'+i;
     div.style.cssText='margin-bottom:8px;padding:6px 8px;border-radius:8px;background:'+(isActive?'#1a2a3a':'#161616');
-    div.innerHTML='<div class="sr"><span class="l">'+p.name+' ('+Math.round(p.hz/1000)+'kHz)</span><span class="v" style="color:'+(isActive?'var(--green)':'var(--muted)')+'">SG='+p.sg+'</span></div>'
-      +'<div class="ea">'
-      +'<button class="btn btn-dark btn-sm" onclick="setSg('+i+',-5)">-5</button>'
-      +'<button class="btn btn-dark btn-sm" onclick="setSg('+i+',-1)">-1</button>'
-      +'<button class="btn btn-blue btn-sm" onclick="setSg('+i+',1)">+1</button>'
-      +'<button class="btn btn-blue btn-sm" onclick="setSg('+i+',5)">+5</button></div>';
+    div.innerHTML='<div class="sr" id="sgLbl'+i+'" style="margin-bottom:4px">'+p.name+' ('+Math.round(p.hz/1000)+'kHz) <span style="color:'+(isActive?'var(--green)':'var(--muted)')+'">SG='+p.sg+'</span></div>'
+      +'<div style="display:flex;align-items:center;gap:8px">'
+      +'<input type="text" inputmode="numeric" pattern="[0-9]*" id="sgIn'+i+'" value="'+p.sg+'" style="width:80px;padding:6px 8px;background:#222;border:1px solid #444;border-radius:6px;color:#fff;font-size:.9em;text-align:center" placeholder="0-500">'
+      +'<button class="btn btn-blue btn-sm" id="sgBtn'+i+'">Set</button>'
+      +'<span style="color:var(--dim);font-size:.7em">0 – 500</span></div>';
     c.appendChild(div);
+    document.getElementById('sgBtn'+i).addEventListener('click',function(){setSg(i)});
+    document.getElementById('sgIn'+i).addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();setSg(i)}});
+    document.getElementById('sgIn'+i).addEventListener('blur',function(){setSg(i)});
   });
+  sgBuilt=true;
 }
 
 function upd(d){
@@ -388,6 +509,8 @@ function upd(d){
   document.getElementById('sv').textContent=d.profileName+' \u2014 '+d.speed+'Hz (SG='+d.sgTrip+')';
     document.getElementById('cp').textContent=d.position;
     document.getElementById('wzv').textContent=d.workZone;
+  if(d.wifiStatus){document.getElementById('wfStatus').textContent=d.wifiStatus;document.getElementById('wfSSID').textContent=d.wifiSSID;document.getElementById('wfIP').textContent=d.wifiIP}
+  if(d.currentMa){document.getElementById('mcv').textContent=d.currentMa;document.getElementById('mcSlider').value=d.currentMa;document.getElementById('mcWarn').style.display=d.currentMa>4000?'block':'none'}
   if(d.profiles){buildProfileBtns(d.profiles,d.profileIdx);buildSgControls(d.profiles,d.profileIdx)}
   document.getElementById('btv').textContent=d.batchTarget>0?d.batchTarget:'OFF';
   const bts=document.getElementById('btStatus');
@@ -421,11 +544,12 @@ function upd(d){
 }
 
 function toggleRun(){fetch('/api/toggle_run',{method:'POST'})}
-function setSg(p,d){fetch('/api/sg_trip?profile='+p+'&delta='+d,{method:'POST'})}
+function setSg(p){const v=parseInt(document.getElementById('sgIn'+p).value)||0;fetch('/api/sg_trip?profile='+p+'&value='+v,{method:'POST'})}
 function setWz(d){fetch('/api/work_zone?delta='+d,{method:'POST'})}
 function setBatch(d){fetch('/api/batch?delta='+d,{method:'POST'})}
 function doBatch(a){fetch('/api/batch?action='+a,{method:'POST'})}
 function setProfile(i){fetch('/api/profile?idx='+i,{method:'POST'})}
+function setCurrent(v){document.getElementById('mcv').textContent=v;document.getElementById('mcWarn').style.display=v>4000?'block':'none';fetch('/api/current?ma='+v,{method:'POST'})}
 function adj(w,d){fetch('/api/endpoint?which='+w+'&delta='+d,{method:'POST'})}
 function doAct(a){fetch('/api/action?do='+a,{method:'POST'})}
 function saveWifi(){
@@ -587,9 +711,15 @@ void setupWebServer() {
       uint8_t p = (uint8_t)req->getParam("profile")->value().toInt();
       if (p < NUM_PROFILES) tgt = p;
     }
-    if (req->hasParam("delta")) {
+    if (req->hasParam("value")) {
+      webSgTripProfile = tgt;
+      webSgTripDelta = req->getParam("value")->value().toInt();
+      webSgTripAbsolute = true;
+      webSgTripDeltaPending = true;
+    } else if (req->hasParam("delta")) {
       webSgTripProfile = tgt;
       webSgTripDelta = req->getParam("delta")->value().toInt();
+      webSgTripAbsolute = false;
       webSgTripDeltaPending = true;
     }
     req->send(200, "text/plain", "ok");
@@ -599,6 +729,17 @@ void setupWebServer() {
     if (req->hasParam("delta")) {
       webWorkZoneDelta = req->getParam("delta")->value().toInt();
       webWorkZoneDeltaPending = true;
+    }
+    req->send(200, "text/plain", "ok");
+  });
+
+  webServer.on("/api/current", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (req->hasParam("ma")) {
+      uint16_t ma = (uint16_t)req->getParam("ma")->value().toInt();
+      if (ma < RUN_CURRENT_MIN) ma = RUN_CURRENT_MIN;
+      if (ma > RUN_CURRENT_MAX) ma = RUN_CURRENT_MAX;
+      webCurrentMaValue = ma;
+      webCurrentMaPending = true;
     }
     req->send(200, "text/plain", "ok");
   });
@@ -781,7 +922,12 @@ void handleWebUIUpdates() {
     webSgTripDeltaPending = false;
     uint8_t tgt = webSgTripProfile;
     if (tgt < NUM_PROFILES) {
-      int32_t v = (int32_t)profiles[tgt].sg_trip + webSgTripDelta;
+      int32_t v;
+      if (webSgTripAbsolute) {
+        v = webSgTripDelta;
+      } else {
+        v = (int32_t)profiles[tgt].sg_trip + webSgTripDelta;
+      }
       profiles[tgt].sg_trip = (uint16_t)constrain(v, (int32_t)RUN_SG_TRIP_MIN, (int32_t)RUN_SG_TRIP_MAX);
     }
     ui_update_sg_val();
@@ -816,6 +962,12 @@ void handleWebUIUpdates() {
   if (webCounterResetRequested) {
     webCounterResetRequested = false;
     counter = 0;
+  }
+  if (webCurrentMaPending) {
+    webCurrentMaPending = false;
+    RUN_CURRENT_MA = webCurrentMaValue;
+    driver.rms_current(RUN_CURRENT_MA);
+    webLog("Current set to %u mA", RUN_CURRENT_MA);
   }
   if (webLogClearRequested) {
     webLogClearRequested = false;

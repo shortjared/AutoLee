@@ -18,6 +18,7 @@ The mock simulates:
 - /api/work_zone      POST  - adjusts work zone
 - /api/batch          POST  - batch target/start/clear
 - /api/action         POST  - calibrate, reset_counter, return_home
+- /api/current        POST  - adjusts motor current (mA)
 - /api/log_clear      POST  - clears log
 - /api/ota            POST  - fake OTA (always succeeds)
 - /api/wifi           POST  - fake wifi save
@@ -39,7 +40,7 @@ from pathlib import Path
 # Simulated device state
 # ---------------------------------------------------------------------------
 state = {
-    "version": "1.5-mock",
+    "version": "1.6-mock",
     "runState": "IDLE",  # IDLE, RUNNING, STOPPING, CALIBRATING, STALLED, HOMING
     "counter": 42,
     "calibrated": True,
@@ -50,18 +51,21 @@ state = {
     "upOffset": 0,
     "downOffset": -500,
     "position": 0,
-    "sgTrip": 80,
+    "sgTrip": 15,
     "workZone": 5500,
-    
+    "currentMa": 2500,
     "profileIdx": 1,
     "profiles": [
-        {"name": "Slow",   "hz": 30000, "sg": 80},
-        {"name": "Normal", "hz": 40000, "sg": 80},
-        {"name": "Fast",   "hz": 50000, "sg": 80},
+        {"name": "Slow",   "hz": 15000, "sg": 350},
+        {"name": "Normal", "hz": 35000, "sg": 15},
+        {"name": "Fast",   "hz": 45000, "sg": 1},
     ],
     "batchTarget": 0,
     "batchCount": 0,
     "batchActive": False,
+    "wifiStatus": "Connected",
+    "wifiSSID": "MockNetwork",
+    "wifiIP": "192.168.1.42",
 }
 
 log_lines: list[str] = []
@@ -87,10 +91,14 @@ def state_json() -> str:
             "position": state["position"],
             "sgTrip": p["sg"],
             "workZone": state["workZone"],
+            "currentMa": state["currentMa"],
             "profileIdx": state["profileIdx"],
             "profileName": p["name"],
             "profiles": [{"name": p["name"], "hz": p["hz"], "sg": p["sg"]}
                          for p in state["profiles"]],
+            "wifiStatus": state["wifiStatus"],
+            "wifiSSID": state["wifiSSID"],
+            "wifiIP": state["wifiIP"],
             "batchTarget": state["batchTarget"],
             "batchCount": state["batchCount"],
             "batchActive": state["batchActive"],
@@ -260,13 +268,26 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/sg_trip":
             profile = int(p("profile", state["profileIdx"]))
-            delta = int(p("delta", 0))
+            value = p("value")
+            delta = p("delta")
             with lock:
                 if 0 <= profile < len(state["profiles"]):
-                        v = state["profiles"][profile]["sg"] + delta
+                    if value is not None:
+                        v = int(value)
+                    elif delta is not None:
+                        v = state["profiles"][profile]["sg"] + int(delta)
+                    else:
+                        v = state["profiles"][profile]["sg"]
                     state["profiles"][profile]["sg"] = clamp(v, 0, 500)
             self._send(200, "text/plain", "ok")
 
+        elif path == "/api/current":
+            ma = p("ma")
+            if ma is not None:
+                with lock:
+                    state["currentMa"] = clamp(int(ma), 1000, 4500)
+                    add_log(f"Current set to {state['currentMa']} mA")
+            self._send(200, "text/plain", "ok")
 
         elif path == "/api/work_zone":
             delta = int(p("delta", 0))
@@ -275,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/plain", "ok")
 
         elif path == "/api/batch":
-            delta = int(p("delta", 0))
+            delta = p("delta")
             action = p("action")
             with lock:
                 if delta is not None:
