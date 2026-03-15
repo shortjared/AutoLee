@@ -442,7 +442,6 @@ void ui_build_all_screens() {
   lv_obj_t *b_cal    = make_btn(sc, "Calibrate",     140, 44, Theme::CAL_BTN, &lv_font_montserrat_20);
   lv_obj_t *b_config = make_btn(sc, "Config",        140, 44, Theme::ACCENT, &lv_font_montserrat_20);
   lv_obj_t *b_reset  = make_btn(sc, "Reset Count",   140, 44, 0xB42318, &lv_font_montserrat_20);
-  lv_obj_t *b_wifi_reset = make_btn(sc, "Reset WiFi", 140, 44, 0xB42318, &lv_font_montserrat_20);
   lv_obj_t *b_back_s = make_btn(sn, "Back", 140, 44, Theme::BTN_MID, &lv_font_montserrat_20);
   lv_obj_align(b_back_s, LV_ALIGN_CENTER, 0, 0);
 
@@ -541,6 +540,7 @@ void ui_build_all_screens() {
   lv_obj_set_width(lbl_wifi_status, 130);
   lv_obj_set_style_text_align(lbl_wifi_status, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_obj_center(lbl_wifi_status);
+  lv_obj_t *b_wifi_reset = make_btn(wc, "Reset WiFi", 140, 44, 0xB42318, &lv_font_montserrat_20);
   lv_obj_t *b_back_w = make_btn(wn, "Back", 140, 44, Theme::BTN_MID, &lv_font_montserrat_20);
   lv_obj_align(b_back_w, LV_ALIGN_CENTER, 0, 0);
 
